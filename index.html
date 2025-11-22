@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<title>Тетрис — адаптивно и удобно</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    background: #222;
+    color: #eee;
+    font-family: 'Roboto Mono', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 0;
+    min-height: 100vh;
+    box-sizing: border-box;
+  }
+  #container {
+    margin-top: 14px;
+    margin-bottom: 14px;
+    display: flex; flex-direction: column; align-items: center;
+    width: 100vw;
+  }
+  #score {
+    margin: 8px 0;
+    font-size: 1.2em;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+  #game-area {
+    width: 92vw;
+    max-width: 400px;
+    background: #16181c;
+    border-radius: 18px;
+    box-shadow: 0 4px 24px #000b;
+    border: 2px solid #444;
+    padding: 16px 0 12px 0;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  #game {
+    display: block;
+    margin: 0 auto;
+    background: #101014;
+    border-radius: 12px;
+    border: 2px solid #333;
+    box-shadow: 0 2px 10px #000c;
+    touch-action: none;
+  }
+  .controls {
+    display: flex; justify-content: center; gap: 12px;
+    margin: 10px 0 2px 0;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .controls button {
+    width: 54px; height: 54px;
+    font-size: 2em;
+    background: linear-gradient(180deg, #444 0%, #222 100%);
+    border: 2px solid #555;
+    color: #fff;
+    border-radius: 14px;
+    box-shadow: 0 2px 8px #0007;
+    cursor: pointer;
+    transition: background 0.14s, transform 0.09s;
+    outline: none;
+  }
+  .controls button:active {
+    background: #3ecb21;
+    color: #171;
+    transform: scale(0.96);
+  }
+</style>
+</head>
+<body>
+<div id="container">
+  <div id="score">Очки: 0</div>
+  <div id="game-area">
+    <canvas id="game"></canvas>
+    <div class="controls">
+      <button id="leftBtn">←</button>
+      <button id="rotateBtn">⟳</button>
+      <button id="rightBtn">→</button>
+      <button id="downBtn">↓</button>
+    </div>
+  </div>
+</div>
+<script>
+const ROWS = 20, COLS = 10;
+let canvas = document.getElementById('game');
+let gameArea = document.getElementById('game-area');
+
+// === Responsive sizing ===
+function fitCanvas() {
+  let maxWidth = Math.min(window.innerWidth * 0.92, 400);
+  let blockSize = Math.floor(maxWidth / COLS);
+  canvas.width = blockSize * COLS;
+  canvas.height = blockSize * ROWS;
+  canvas.style.width = (blockSize * COLS) + 'px';
+  canvas.style.height = (blockSize * ROWS) + 'px';
+  // Stretch controls container as needed
+  gameArea.style.maxWidth = canvas.style.width;
+}
+fitCanvas();
+window.addEventListener('resize', fitCanvas);
+
+const ctx = canvas.getContext('2d');
+const COLORS = [null,'#0ff','#05f','#f80','#ff0','#0f0','#c2f','#f00'];
+const SHAPES = [
+  [],
+  [[1,1,1,1]], // I
+  [[2,0,0],[2,2,2]], // J
+  [[0,0,3],[3,3,3]], // L
+  [[4,4],[4,4]], // O
+  [[0,5,5],[5,5,0]], // S
+  [[0,6,0],[6,6,6]], // T
+  [[7,7,0],[0,7,7]] // Z
+];
+
+function createMatrix(rows, cols) {
+  const matrix = [];
+  while (rows--) matrix.push(new Array(cols).fill(0));
+  return matrix;
+}
+let board = createMatrix(ROWS, COLS);
+let score = 0;
+const player = { pos: {x: 3, y: 0}, matrix: SHAPES[1], dropping: false };
+
+// Плавная анимация опускания фигуры
+let targetY = 0, animationSpeed = 0.26;
+
+// Отрисовка блока с закруглением и тенью
+function drawBlock(x, y, color) {
+  let blockSize = canvas.width / COLS;
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.shadowColor = "#222";
+  ctx.shadowBlur = 6;
+  ctx.beginPath();
+  ctx.moveTo(x * blockSize + 3, y * blockSize + 0);
+  ctx.lineTo((x+1)*blockSize-3, y*blockSize+0);
+  ctx.quadraticCurveTo((x+1)*blockSize, y*blockSize+3, (x+1)*blockSize, y*blockSize+7);
+  ctx.lineTo((x+1)*blockSize, (y+1)*blockSize-7);
+  ctx.quadraticCurveTo((x+1)*blockSize, (y+1)*blockSize-3, (x+1)*blockSize-3, (y+1)*blockSize);
+  ctx.lineTo(x*blockSize+3, (y+1)*blockSize);
+  ctx.quadraticCurveTo(x*blockSize, (y+1)*blockSize-3, x*blockSize, (y+1)*blockSize-7);
+  ctx.lineTo(x*blockSize, y*blockSize+7);
+  ctx.quadraticCurveTo(x*blockSize, y*blockSize+3, x*blockSize+3, y*blockSize);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawMatrix(matrix, offset, ghost=false) {
+  matrix.forEach((row, y) => {
+    row.forEach((value, x) => {
+      if (value !== 0) {
+        drawBlock(x + offset.x, y + offset.y, ghost ? "#ccc7" : COLORS[value]);
+      }
+    });
+  });
+}
+
+function draw() {
+  // Очистка
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  board.forEach((row, y) => {
+    row.forEach((value, x) => {
+      if (value !== 0) drawBlock(x, y, COLORS[value]);
+    });
+  });
+  // Призрачная фигура (куда опустится)
+  drawMatrix(player.matrix, getGhostOffset(), true);
+
+  // Плавная визуализация падения
+  let displayY = player.pos.y;
+  if (Math.abs(targetY - player.pos.y) > 0.01) {
+    displayY = (targetY - player.pos.y)*animationSpeed + player.pos.y;
+  }
+  drawMatrix(player.matrix, { x: player.pos.x, y: displayY });
+}
+
+function getGhostOffset() {
+  let ghostY = player.pos.y;
+  while (!collide(board, {matrix: player.matrix, pos: {x: player.pos.x, y: ghostY+1}})) {
+    ghostY++;
+  }
+  return {x: player.pos.x, y: ghostY};
+}
+
+function collide(board, playerObj) {
+  const m = playerObj.matrix;
+  const o = playerObj.pos;
+  for (let y = 0; y < m.length; y++) {
+    for (let x = 0; x < m[y].length; x++) {
+      if (m[y][x] !== 0 &&
+         (board[y + o.y] &&
+          board[y + o.y][x + o.x]) !== 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function merge(board, playerObj) {
+  playerObj.matrix.forEach((row, y) => {
+    row.forEach((value, x) => {
+      if (value !== 0)
+        board[y + playerObj.pos.y][x + playerObj.pos.x] = value;
+    });
+  });
+}
+
+function playerReset() {
+  const pieces = 'TJLOSZI';
+  const index = pieces.length * Math.random() | 0;
+  player.matrix = SHAPES[index + 1];
+  player.pos.y = 0;
+  player.pos.x = 3;
+  targetY = 0;
+  if (collide(board, player)) {
+    score = 0;
+    board = createMatrix(ROWS, COLS);
+    updateScore();
+    alert('Игра окончена');
+  }
+}
+
+function sweep() {
+  let lines = 0;
+  for (let y = board.length - 1; y >= 0; y--) {
+    if (board[y].every(val => val !== 0)) {
+      board.splice(y, 1);
+      board.unshift(new Array(COLS).fill(0));
+      lines++;
+      y++;
+    }
+  }
+  if (lines > 0) {
+    score += [0, 40, 100, 300, 1200][lines];
+    updateScore();
+  }
+}
+
+function updateScore() {
+  document.getElementById('score').innerText = 'Очки: ' + score;
+}
+
+let dropCounter = 0;
+let dropInterval = 400;
+let lastTime = 0;
+
+function animateDrop(target, callback) {
+  player.dropping = true;
+  const step = () => {
+    if (player.pos.y < target) {
+      player.pos.y++;
+      draw();
+      setTimeout(step, 28);
+    } else {
+      player.dropping = false;
+      callback();
+    }
+  };
+  step();
+}
+
+function update(time = 0) {
+  if (!player.dropping) {
+    const deltaTime = time - lastTime;
+    lastTime = time;
+    dropCounter += deltaTime;
+    targetY = player.pos.y;
+    if (dropCounter > dropInterval) {
+      moveDown();
+    }
+  }
+  draw();
+  requestAnimationFrame(update);
+}
+
+function moveLeft() {
+  if (!player.dropping) {
+    player.pos.x--;
+    if (collide(board, player)) player.pos.x++;
+    draw();
+  }
+}
+function moveRight() {
+  if (!player.dropping) {
+    player.pos.x++;
+    if (collide(board, player)) player.pos.x--;
+    draw();
+  }
+}
+function moveDown() {
+  if (!player.dropping) {
+    if (!collide(board, {matrix: player.matrix, pos: {x: player.pos.x, y: player.pos.y+1}})) {
+      targetY = player.pos.y + 1;
+      animateDrop(targetY, () => {
+        dropCounter = 0;
+      });
+      player.pos.y++;
+    } else {
+      merge(board, player);
+      sweep();
+      playerReset();
+      dropCounter = 0;
+    }
+    draw();
+  }
+}
+function rotate() {
+  if (!player.dropping) {
+    const oldMatrix = player.matrix;
+    const oldX = player.pos.x;
+    player.matrix = rotateMatrix(player.matrix);
+
+    let offset = 1;
+    while (collide(board, player)) {
+      player.pos.x += offset;
+      offset = -(offset + (offset > 0 ? 1 : -1));
+      if (Math.abs(offset) > player.matrix[0].length) {
+        player.matrix = oldMatrix;
+        player.pos.x = oldX;
+        break;
+      }
+    }
+    draw();
+  }
+}
+
+function rotateMatrix(matrix) {
+  const N = matrix.length;
+  const result = [];
+  for (let y = 0; y < N; ++y) {
+    result[y] = [];
+    for (let x = 0; x < N; ++x) {
+      result[y][x] = matrix[N - x - 1][y];
+    }
+  }
+  return result;
+}
+
+// Обработчики кнопок
+document.getElementById('leftBtn').addEventListener('click', moveLeft);
+document.getElementById('rightBtn').addEventListener('click', moveRight);
+document.getElementById('downBtn').addEventListener('click', moveDown);
+document.getElementById('rotateBtn').addEventListener('click', rotate);
+
+// Touch для мобильных
+['leftBtn','rightBtn','downBtn','rotateBtn'].forEach(id => {
+  document.getElementById(id).addEventListener('touchstart', e => {
+    e.preventDefault();
+    document.getElementById(id).click();
+  });
+});
+
+// Клавиатура
+document.addEventListener('keydown', event => {
+  if (event.key === 'ArrowLeft') moveLeft();
+  else if (event.key === 'ArrowRight') moveRight();
+  else if (event.key === 'ArrowDown') moveDown();
+  else if (event.key === 'ArrowUp' || event.key === ' ') rotate();
+});
+
+updateScore();
+update();
+</script>
+</body>
+</html>
